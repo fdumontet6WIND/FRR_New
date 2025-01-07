@@ -519,8 +519,12 @@ int zsend_redistribute_route(int cmd, struct zserv *client,
 	const struct prefix *p, *src_p;
 	uint16_t count = 0;
 	afi_t afi;
-	size_t stream_size =
-		MAX(ZEBRA_MAX_PACKET_SIZ, sizeof(struct zapi_route));
+	size_t stream_size;
+	unsigned char local_s[sizeof(struct stream) + ZEBRA_MAX_PACKET_SIZ];
+	struct stream *s_p = (struct stream *)local_s;
+
+	memset(local_s, 0, sizeof(local_s));
+	s_p->size = ZEBRA_MAX_PACKET_SIZ;
 
 	srcdest_rnode_prefixes(rn, &p, &src_p);
 	memset(&api, 0, sizeof(api));
@@ -611,13 +615,14 @@ int zsend_redistribute_route(int cmd, struct zserv *client,
 	SET_FLAG(api.message, ZAPI_MESSAGE_MTU);
 	api.mtu = re->mtu;
 
-	struct stream *s = stream_new(stream_size);
 
 	/* Encode route and send. */
-	if (zapi_route_encode(cmd, s, &api) < 0) {
-		stream_free(s);
+	if (zapi_route_encode(cmd, s_p, &api) < 0)
 		return -1;
-	}
+	/* Allocate a new stream based on the encoded data size. */
+	stream_size = stream_get_endp(s_p);
+	struct stream *s = stream_new(stream_size);
+	s = stream_copy(s, s_p);
 
 	if (IS_ZEBRA_DEBUG_SEND)
 		zlog_debug("%s: %s to client %s: type %s, vrf_id %d, p %pFX",
@@ -1514,6 +1519,7 @@ static void zread_interface_add(ZAPI_HANDLER_ARGS)
 	struct interface *ifp;
 
 	vrf_id_t vrf_id = zvrf_id(zvrf);
+
 	if (vrf_id != VRF_DEFAULT && vrf_id != VRF_UNKNOWN) {
 		FOR_ALL_INTERFACES (zvrf->vrf, ifp) {
 			/* Skip pseudo interface. */
